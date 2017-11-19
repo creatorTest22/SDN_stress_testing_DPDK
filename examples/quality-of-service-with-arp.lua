@@ -8,16 +8,27 @@ local stats		= require "stats"
 local hist		= require "histogram"
 local timer		= require "timer"
 local log		= require "log"
+local arp    = require "proto.arp"
 
 local PKT_SIZE	= 124 -- without CRC
 -- check out l3-load-latency.lua if you want to get this via ARP
-local ETH_DST	= "10:11:12:13:14:15" -- src mac is taken from the NIC
+--local ETH_DST	= "10:11:12:13:14:15" -- src mac is taken from the NIC
+local ETH_DST = nil
 local IP_SRC	= "192.168.0.1"
-local NUM_FLOWS	= 256 -- src ip will be IP_SRC + random(0, NUM_FLOWS - 1)
+local NUM_FLOWS	= 1 -- src ip will be IP_SRC + random(0, NUM_FLOWS - 1)
 local IP_DST	= "10.0.0.1"
 local PORT_SRC	= 1234
 local PORT_FG	= 42
 local PORT_BG	= 43
+
+-- answer ARP requests for this IP on the rx port
+-- change this if benchmarking something like a NAT device
+local RX_IP             = IP_DST
+-- used to resolve DST_MAC
+local GW_IP             = IP_DST
+-- used as source IP to resolve GW_IP to DST_MAC
+local ARP_IP    = IP_SRC
+
 
 function configure(parser)
 	parser:description("Generates two flows of traffic and compares them. This example requires an ixgbe NIC due to the used hardware features.")
@@ -41,7 +52,7 @@ function master(args)
 	else
 		-- two different ports, different configuration
 		txDev = device.config{port = args.txDev, rxQueues = 3, txQueues = 3}
-		rxDev = device.config{port = args.rxDev, rxQueues = 3}
+		rxDev = device.config{port = args.rxDev, rxQueues = 3, txQueues = 3}
 	end
 	-- wait until the links are up
 	device.waitForLinks()
@@ -64,12 +75,34 @@ function master(args)
 	-- measure latency from a second queue
 	mg.startSharedTask("timerSlave", txDev:getTxQueue(2), rxDev:getRxQueue(1), PORT_BG, PORT_FG, args.fgRate / (args.fgRate + args.bgRate))
 	-- wait until all tasks are finished
+	
+	arp.startArpTask{
+                -- run ARP on both ports
+                { rxQueue = rxDev:getRxQueue(2), txQueue = rxDev:getTxQueue(2), ips = RX_IP },
+                -- we need an IP address to do ARP requests on this interface
+                { rxQueue = txDev:getRxQueue(2), txQueue = txDev:getTxQueue(2), ips = ARP_IP }
+        }
+
 	mg.waitForTasks()
+end
+
+local function doArp()
+        if not ETH_DST then
+                log:info("Performing ARP lookup on %s", GW_IP)
+                ETH_DST = arp.blockingLookup(GW_IP, 5)
+                if not ETH_DST then
+                        log:info("ARP lookup failed, using default destination mac address")
+                        return
+                end
+        end
+        log:info("Destination mac: %s", ETH_DST)
 end
 
 function loadSlave(queue, port)
 	mg.sleepMillis(100) -- wait a few milliseconds to ensure that the rx thread is running
 	-- TODO: implement barriers
+	doArp()
+
 	local mem = memory.createMemPool(function(buf)
 		buf:getUdpPacket():fill{
 			pktLength = PKT_SIZE, -- this sets all length headers fields in all used protocols
@@ -141,6 +174,9 @@ end
 
 
 function timerSlave(txQueue, rxQueue, bgPort, port, ratio)
+
+	doArp()
+
 	local txDev = txQueue.dev
 	local rxDev = rxQueue.dev
 	local timestamper = ts:newUdpTimestamper(txQueue, rxQueue)

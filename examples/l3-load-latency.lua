@@ -29,7 +29,7 @@ function configure(parser)
 	parser:argument("txDev", "Device to transmit from."):convert(tonumber)
 	parser:argument("rxDev", "Device to receive from."):convert(tonumber)
 	parser:option("-r --rate", "Transmit rate in Mbit/s."):default(10000):convert(tonumber)
-	parser:option("-f --flows", "Number of flows (randomized source IP)."):default(4):convert(tonumber)
+	parser:option("-f --flows", "Number of flows (randomized source IP)."):default(1):convert(tonumber)
 	parser:option("-s --size", "Packet size."):default(60):convert(tonumber)
 end
 
@@ -43,7 +43,7 @@ function master(args)
 		txDev:getTxQueue(0):setRate(args.rate - (args.size + 4) * 8 / 1000)
 	end
 	mg.startTask("loadSlave", txDev:getTxQueue(0), rxDev, args.size, args.flows)
-	mg.startTask("timerSlave", txDev:getTxQueue(1), rxDev:getRxQueue(1), args.size, args.flows)
+	--mg.startTask("timerSlave", txDev:getTxQueue(1), rxDev:getRxQueue(1), args.size, args.flows)
 	arp.startArpTask{
 		-- run ARP on both ports
 		{ rxQueue = rxDev:getRxQueue(2), txQueue = rxDev:getTxQueue(2), ips = RX_IP },
@@ -53,7 +53,7 @@ function master(args)
 	mg.waitForTasks()
 end
 
-local function fillUdpPacket(buf, len)
+local function fillUdpPacket(queue, buf, len)
 	buf:getUdpPacket():fill{
 		ethSrc = queue,
 		ethDst = DST_MAC,
@@ -80,7 +80,7 @@ end
 function loadSlave(queue, rxDev, size, flows)
 	doArp()
 	local mempool = memory.createMemPool(function(buf)
-		fillUdpPacket(buf, size)
+		fillUdpPacket(queue, buf, size)
 	end)
 	local bufs = mempool:bufArray()
 	local counter = 0
@@ -118,7 +118,7 @@ function timerSlave(txQueue, rxQueue, size, flows)
 	local baseIP = parseIPAddress(SRC_IP_BASE)
 	while mg.running() do
 		hist:update(timestamper:measureLatency(size, function(buf)
-			fillUdpPacket(buf, size)
+			fillUdpPacket(txQueue, buf, size)
 			local pkt = buf:getUdpPacket()
 			pkt.ip4.src:set(baseIP + counter)
 			counter = incAndWrap(counter, flows)

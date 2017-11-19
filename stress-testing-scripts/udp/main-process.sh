@@ -1,14 +1,14 @@
 #!/bin/bash
 
 # Populate the list holding the remaining flows per rate group
-for i in `seq 1 20`;
+for i in `seq 1 3`;
 do
         rates[$i]=3
 done
 
 # Variable initialization
 start=1
-end=20
+end=3
 flowid=10000
 
 while [ $start -le $end ]
@@ -31,7 +31,8 @@ do
 
                # sudo hping3 30.30.30.21 -a 30.30.30.20 --udp --keep -s $flowid -p $dport --quiet -i u$interval &
  
-                sudo ~/DPDK_TGen/MoonGen/build/MoonGen stress-testing-scripts/udp/mflows_pps_lat_ver1.lua 0 1 --rate_pps=rate --sport=$flowid --dport=$dport --queue_pair=$i --tstamp=true 
+                sudo ~/DPDK_TGen_local/SDN_stress_testing_DPDK/build/MoonGen mflows_pps_lat_ver2.lua 0 1 2 3 --rate_pps=$rate --sport=$flowid --dport=$dport --queue_pair=$i --tstamp=0
+		#tstamp=0 means ON, tstamp=1 means OFF  
         elif [ $i -eq $start ]
         then
                 temp=$start
