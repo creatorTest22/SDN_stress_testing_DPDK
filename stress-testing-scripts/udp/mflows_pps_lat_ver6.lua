@@ -10,6 +10,7 @@ local arp    = require "proto.arp"
 local log    = require "log"
 local table  = require "table"
 
+
 -- set addresses here
 local DST_MAC = nil -- temporary placeholder for a resolved MAC
 local DST_MAC_NIC1	= nil -- resolved via ARP on GW_IP or DST_IP, can be overriden with a string here
@@ -51,6 +52,7 @@ function configure(parser)
 	parser:option("--queue_pairs", "A queue pair number (TX/RX) to use on a NIC's port."):default(0):convert(tonumber)
 	parser:option("--tstamp", "Enable(true=0)/Disable(false=1) packet hardware (NIC) timestamping"):default(1):convert(tonumber)
 	parser:option("-f --flows", "The number of flows per PACKET RATE GROUP"):default(1):convert(tonumber)
+	parser:option("-t --time", "Duration of the test run cycle"):default(0):convert(tonumber)
 
 end
 
@@ -75,6 +77,8 @@ end
  
 function master(args)
 	
+	--Set the runtime of the experiment (duration)
+	
 	txDev0 = device.config{port = args.txDev0, rxQueues = 64, txQueues = 64}
 	rxDev0 = device.config{port = args.rxDev0, rxQueues = 64, txQueues = 64}
 	txDev1 = device.config{port = args.txDev1, rxQueues = 64, txQueues = 64}
@@ -95,6 +99,7 @@ function master(args)
 	log:info("Parsed argument: queue_pairs=%d", args.queue_pairs)
 	log:info("Parsed argument: tstamp=%d", args.tstamp)	
 	log:info("Parsed argument: flows per rate group=%d", args.flows)
+	log:info("Parsed argument: Duration=%d (s)", args.time)
 
 	device.waitForLinks()
 	-- max 1kpps timestamping traffic timestamping
@@ -141,6 +146,7 @@ function master(args)
 	-- arrays of ports for flow creation per port per NIC
 	src_ports_slice = {}
 	dst_ports_slice = {}
+	src_ports_slice_load = {}
 	  
 	if args.rate > 0 then
 		
@@ -219,36 +225,42 @@ function master(args)
 		
 		--table.sort(rate_group_to_dst_port_map)
 	  	print("RG_to_udp_port_map: ")
+		rg_to_dst_port_map_keys = {}
+		local temp_counter = 1
 		for key,value in pairs(rate_group_to_dst_port_map) do
+			rg_to_dst_port_map_keys[temp_counter] = key
+			print("Key/Value pairs for the RG<->DPORT mapping:")
 			print(key, value)
+			temp_counter = temp_counter + 1
 		end
+		
 		-- Set the rates of all the used queues (Tx/RX pairs) in PPS
 		for index=1, args.queue_pairs do
 
 			if args.tstamp == 0 then
 				pk_size = args.size + 24
 				--txDev0:getTxQueue(args.queue_pair):setRate(rate_to_Mbps(args.rate_pps, pk_size) - (args.size + 4) * 8 / 1000)
-				local test_rate = rate_to_Mbps(rate_groups[index], pk_size)
+				local test_rate = rate_to_Mbps(rate_groups[index]*flows_per_group[index], pk_size)
 				log:info("Rate in Mbps is: %f", test_rate)
 			
 				--txDev0:getTxQueue(args.queue_pair):setRate(rate_to_Mbps(args.rate_pps, pk_size) - (args.size + 4) * 8 / 1000)
-				if index <= MAX_QUEUE_COUNT_PORT_82599ES then
+				if index <= MAX_QUEUE_COUNT_PORT_82599ES -2 then
 
-					txDev0:getTxQueue(index):setRate(rate_to_Mbps(rate_groups[index] , pk_size))
-				elseif index > 0 and index > MAX_QUEUE_COUNT_PORT_82599ES and index < 2*MAX_QUEUE_COUNT_PORT_82599ES then
+					txDev0:getTxQueue(index):setRate(rate_to_Mbps(rate_groups[index]*flows_per_group[index] , pk_size))
+				elseif index > 0 and index > MAX_QUEUE_COUNT_PORT_82599ES - 2 and index < 2*MAX_QUEUE_COUNT_PORT_82599ES - 4 then
 					--txDev1:getTxqueue(queue_pair):setRate(rate_to_Mbps(args.rate_pps, args.srate_groupize) - (args.size + 4) * 8 / 1000)
-					txDev1:getTxqueue(index-MAX_QUEUE_COUNT_PORT_82599ES):setRate(rate_to_Mbps(rate_groups[index], pk_size))
+					txDev1:getTxqueue(index-MAX_QUEUE_COUNT_PORT_82599ES):setRate(rate_to_Mbps(rate_groups[index]*flows_per_group[index], pk_size))
 				end
 			else
 				pk_size = args.size
-				local test_rate = rate_to_Mbps(rate_groups[index], pk_size)
+				local test_rate = rate_to_Mbps(rate_groups[index]*flows_per_group[index], pk_size)
                         	log:info("Rate in Mbps is: %f", test_rate)
-				if index <= MAX_QUEUE_COUNT_PORT_82599ES then
+				if index <= MAX_QUEUE_COUNT_PORT_82599ES - 2 then
 					--txDev0:getTxQueue(args.queue_pair):setRate(rate_to_Mbps(args.rate_pps, pk_size) - (args.size + 4) * 8 / 1000)
-                        		txDev0:getTxQueue(index):setRate(rate_to_Mbps(rate_groups[index], pk_size))
-				elseif index > 0 and index > MAX_QUEUE_COUNT_PORT_82599ES and index < 2*MAX_QUEUE_COUNT_PORT_82599ES then
+                        		txDev0:getTxQueue(index):setRate(rate_to_Mbps(rate_groups[index]*flows_per_group[index], pk_size))
+				elseif index > 0 and index > MAX_QUEUE_COUNT_PORT_82599ES -2 and index < 2*MAX_QUEUE_COUNT_PORT_82599ES - 4 then
 					--txDev1:getTxqueue(queue_pair):setRate(rate_to_Mbps(args.rate_pps, pk_size) - (args.size + 4) * 8 / 1000)
-					txDev1:getTxqueue(index-MAX_QUEUE_COUNT_PORT_82599ES):setRate(rate_to_Mbps(rate_groups[index], pk_size))
+					txDev1:getTxqueue(index-MAX_QUEUE_COUNT_PORT_82599ES):setRate(rate_to_Mbps(rate_groups[index]*flows_per_group[index], pk_size))
 				end
 			end
 		end
@@ -259,7 +271,7 @@ function master(args)
 	
 	local remaining_queues = args.queue_pairs
 	local queues_to_use = remaining_queues
-	if args.queue_pairs <= MAX_QUEUE_COUNT_PORT_82599ES then
+	if args.queue_pairs <= MAX_QUEUE_COUNT_PORT_82599ES - 2 then
 		src_ports_slice = subrange(src_ports, 1, total_flows)
 		dst_ports_slice = subrange(dst_ports, 1, args.queue_pairs) 
 		--print("Ranges of UDP SRC and DST ports to use on NIC1 (port0, port1):")
@@ -270,6 +282,8 @@ function master(args)
                 --end
 		txDev0Queues = {}
 		rxDev0Queues = {}
+		
+		local txDev0Queue_tstamp, rxDev0Queue_tstamp = nil, nil
 
 		for i=1, queues_to_use do
                 	txDev0Queues[i] = txDev0:getTxQueue(i)
@@ -284,6 +298,10 @@ function master(args)
                 	print("RX queue: ")
                 	print(rxDev0Queues[i])
         	end
+
+		-- Create a single thread for the timestamping activities:
+		txDev0Queue_tstamp = txDev0:getTxQueue(queues_to_use + 1)
+		rxDev0Queue_tstamp = rxDev0:getRxQueue(queues_to_use + 1) 
 		--[[ 
 		if args.tstamp then
 			
@@ -292,17 +310,26 @@ function master(args)
 			mg.startTask("loadSlave", txDev0, rxDev0, queues_to_use, pk_size, src_ports_slice, dst_ports_slice, flows_per_group, rate_group_to_dst_port_map)
 		end
 		]]--
+		local start = 1
 		if args.tstamp then
-
-                        mg.startTask("timerSlave", args.txDev0, args.rxDev0, txDev0Queues, rxDev0Queues, queues_to_use, pk_size, src_ports_slice, dst_ports_slice, flows_per_group, rate_group_to_dst_port_map)
+			for queue_nr=1, queues_to_use do 
+				src_ports_slice_load = subrange(src_ports_slice, start, start + flows_per_group[queue_nr]-1)
+				mg.startTask("loadSlave", args.txDev0, args.rxDev0, txDev0Queues[queue_nr], rxDev0Queues[queue_nr], queue_nr, pk_size, src_ports_slice, dst_ports_slice[queue_nr], flows_per_group[queue_nr], rg_to_dst_port_map_keys[queue_nr], args.time)
+				start = start + flows_per_group[queue_nr]
+			end 
+                        mg.startSharedTask("timerSlave", args.txDev0, args.rxDev0, txDev0Queue_tstamp, rxDev0Queue_tstamp, pk_size, src_ports_slice, dst_ports_slice, flows_per_group, rate_group_to_dst_port_map, args.time)
                 else
-                        mg.startTask("loadSlave", args.txDev0, args.rxDev0, txDev0Queues, rxDev0Queues, queues_to_use, pk_size, src_ports_slice, dst_ports_slice, flows_per_group, rate_group_to_dst_port_map)
+			for queue_nr=1, queues_to_use do
+				src_ports_slice_load = subrange(src_ports_slice, start, start + flows_per_group[queue_nr]-1)
+                        	mg.startTask("loadSlave", args.txDev0, args.rxDev0, txDev0Queues[queue_nr], rxDev0Queues[queue_nr], queue_nr, pk_size, src_ports_slice, dst_ports_slice[queue_nr], flows_per_group[queue_nr], rg_to_dst_port_map_keys[queue_nr], args.time)
+				start = start + flows_per_group[queue_nr]
+			end
                 end
 	
 
-	elseif args.queue_pairs > MAX_QUEUE_COUNT_PORT_82599ES and args.queue_pairs < 2*MAX_QUEUE_COUNT_PORT_82599ES then
-		remaining_queues = remaining_queues - MAX_QUEUE_COUNT_PORT_82599ES - 1 -- since we are reserving the (0) of each used port for ARP
-		queues_to_use = MAX_QUEUE_COUNT_PORT_82599ES - 1
+	elseif args.queue_pairs > MAX_QUEUE_COUNT_PORT_82599ES and args.queue_pairs < 2*MAX_QUEUE_COUNT_PORT_82599ES - 4 then
+		remaining_queues = remaining_queues - MAX_QUEUE_COUNT_PORT_82599ES - 2 -- since we are reserving the (0) of each used port for ARP
+		queues_to_use = MAX_QUEUE_COUNT_PORT_82599ES - 2
 
 		src_ports_slice = subrange(src_ports, 1, args.flows * queues_to_use)
                 dst_ports_slice = subrange(dst_ports, 1, queues_to_use)
@@ -313,6 +340,8 @@ function master(args)
 
 		txDev0Queues = {}
                 rxDev0Queues = {}
+
+		local txDev0Queue_tstamp, rxDev0Queue_tstamp = nil, nil
 
                 for i=1, queues_to_use do
                         txDev0Queues[i] = txDev0:getTxQueue(i)
@@ -328,6 +357,9 @@ function master(args)
                         print(rxDev0Queues[i])
                 end
 
+		-- Create a single thread for the timestamping activities:
+                txDev0Queue_tstamp = txDev0:getTxQueue(queues_to_use + 1)
+                rxDev0Queue_tstamp = rxDev0:getRxQueue(queues_to_use + 1)
 		--[[
 		if args.tstamp then
                         mg.startTask("timerSlave", txDev0, rxDev0, queues_to_use, pk_size, src_ports_slice, dst_ports_slice, flows_per_group, rate_group_to_dst_port_map)
@@ -335,10 +367,28 @@ function master(args)
                         mg.startTask("loadSlave", txDev0, rxDev0, queues_to_use, pk_size, src_ports_slice, dst_ports_slice, flows_per_group, rate_group_to_dst_port_map)
                 end
 		]]--
+		local start = 1
 		if args.tstamp then
-                        mg.startTask("timerSlave", args.txDev0, args.rxDev0, txDev0Queues, rxDev0Queues, queues_to_use, pk_size, src_ports_slice, dst_ports_slice, flows_per_group, rate_group_to_dst_port_map)
+			for queue_nr=1, queues_to_use do
+				src_ports_slice_load = subrange(src_ports_slice, start, start + flows_per_group[queue_nr]-1)
+				mg.startTask("loadSlave", args.txDev0, args.rxDev0, txDev0Queues[queue_nr], rxDev0Queues[queue_nr], queue_nr, pk_size, src_ports_slice, dst_ports_slice, flows_per_group[queue_nr], rg_to_dst_port_map_keys[queue_nr], args.time)
+				if queue_nr ~= queues_to_use then
+					start = start + flows_per_group[queue_nr]
+				else
+					-- do nothing
+				end
+			end
+                        mg.startTask("timerSlave", args.txDev0, args.rxDev0, txDev0Queue_tstamp, rxDev0Queue_tstamp, pk_size, src_ports_slice, dst_ports_slice, flows_per_group[1], rate_group_to_dst_port_map, args.time)
                 else
-                        mg.startTask("loadSlave", args.txDev0, args.rxDev0, txDev0Queues, rxDev0Queues, queues_to_use, pk_size, src_ports_slice, dst_ports_slice, flows_per_group, rate_group_to_dst_port_map)
+			for queue_nr=1, queues_to_use do
+				src_ports_slice_load = subrange(src_ports_slice, start, start + flows_per_group[queue_nr]-1)
+                        	mg.startTask("loadSlave", args.txDev0, args.rxDev0, txDev0Queues[queue_nr], rxDev0Queues[queue_nr], queue_nr, pk_size, src_ports_slice, dst_ports_slice, flows_per_group[queue_nr], rg_to_dst_port_map_keys[queue_nr], args.time)
+				if queue_nr ~= queues_to_use then
+					start = start + flows_per_group[queue_nr]
+				else
+					-- do nothing
+				end
+			end
                 end
 		
 		src_ports_slice = {}
@@ -352,6 +402,8 @@ function master(args)
 
 		txDev1Queues = {}
                 rxDev1Queues = {}
+
+		local txDev1Queue_tstamp, rxDev1Queue_tstamp = nil, nil
 
                 for i=1, remaining_queues do
                         txDev1Queues[i] = txDev1:getTxQueue(i)
@@ -367,6 +419,10 @@ function master(args)
                         print(rxDev1Queues[i])
                 end
 
+		-- Create a single thread for the timestamping activities:
+                txDev1Queue_tstamp = txDev1:getTxQueue(remaining_queues + 1)
+                rxDev1Queue_tstamp = rxDev1:getRxQueue(remaining_queues + 1)
+
 		--[[
 		if args.tstamp then
         		mg.startTask("timerSlave", txDev1, rxDev1, remaining_queues, pk_size, src_ports_slice, dst_ports_slice, flows_per_group, rate_group_to_dst_port_map)
@@ -375,9 +431,26 @@ function master(args)
         	end
 		]]--
 		if args.tstamp then
-                        mg.startTask("timerSlave", txDev1, rxDev1, txDev1Queues, rxDev1Queues, remaining_queues, pk_size, src_ports_slice, dst_ports_slice, flows_per_group, rate_group_to_dst_port_map)
+			for queue_nr=1, remaining_queues do
+				src_ports_slice_load = subrange(src_ports_slice, start, start + flows_per_group[queue_nr]-1)
+				mg.startTask("loadSlave", args.txDev1, args.rxDev1, txDev1Queues[queue_nr], rxDev1Queues[queue_nr], queue_nr, pk_size, src_ports_slice, dst_ports_slice, flows_per_group[queue_nr], rg_to_dst_port_map_keys[queues_to_use + queue_nr], time)
+				if queue_nr ~= queues_to_use then
+                                	start = start + flows_per_group[queue_nr]
+                                else
+                                        -- do nothing
+                                end
+			end
+                        mg.startTask("timerSlave", args.txDev1, args.rxDev1, txDev1Queue_tstamp, rxDev1Queue_tstamp, pk_size, src_ports_slice, dst_ports_slice, flows_per_group, rate_group_to_dst_port_map, time)
                 else
-                        mg.startTask("loadSlave", txDev1, rxDev1, txDev1Queues, rxDev1Queues, remaining_queues, pk_size, src_ports_slice, dst_ports_slice, flows_per_group, rate_group_to_dst_port_map)
+			for queue_nr=1, remaining_queues do
+				src_ports_slice_load = subrange(src_ports_slice, start, start + flows_per_group[queue_nr]-1)
+                        	mg.startTask("loadSlave", args.txDev1, args.rxDev1, txDev1Queues[queue_nr], rxDev1Queues[queue_nr], queue_nr, pk_size, src_ports_slice, dst_ports_slice, flows_per_group[queue_nr], rg_to_dst_port_map_keys[queues_to_use + queue_nr], time)
+				if queue_nr ~= queues_to_use then
+                                        start = start + flows_per_group[queue_nr]
+                                else
+                                        -- do nothing
+                                end
+			end
                 end
 	end
 
@@ -423,7 +496,7 @@ local function doArp()
 end
 
 
-function counterSlave(queue)
+function counterSlave(queue, runtime)
         -- the simplest way to count packets is by receiving them all
         -- an alternative would be using flow director to filter packets by port and use the queue statistics
         -- however, the current implementation is limited to filtering timestamp packets
@@ -431,7 +504,8 @@ function counterSlave(queue)
         -- however, queue statistics are also not yet implemented and the DPDK abstraction is somewhat annoying
         local bufs = memory.bufArray()
         local ctrs = {}
-        while mg.running(100) do
+
+        while mg.running() do
                 local rx = queue:recv(bufs)
                 for i = 1, rx do
                         local buf = bufs[i]
@@ -458,10 +532,10 @@ function counterSlave(queue)
 end
 
 
-function loadSlave(txDev, rxDev, queue_pairs, size, src_ports, dst_ports, flows_per_group, rg_to_dst_port_map)
+function loadSlave(txDev, rxDev, txQueue, rxQueue, queue_nr, size, src_ports, dst_port, flows_per_group, rg_to_dst_port_map_value, runtime)
 	-- comment
 	local mempool = nil
-	if queue_nr <= MAX_QUEUE_COUNT_PORT_82599ES then
+	if queue_nr <= MAX_QUEUE_COUNT_PORT_82599ES-2 then
 		--log:info("queue number = %d", queue_nr)
 		DST_MAC = nil
 		GW_IP = DST_IP_NIC1 
@@ -469,7 +543,7 @@ function loadSlave(txDev, rxDev, queue_pairs, size, src_ports, dst_ports, flows_
 		DST_MAC_NIC1 = DST_MAC
 		
 		local mempool_temp = memory.createMemPool(function(buf)
-                	fillUdpPacket_nic1(txQueue, buf, size, src_port, dst_port)
+                	fillUdpPacket_nic1(txQueue, buf, size, src_ports[1], dst_port)
 		end)
 		mempool = mempool_temp
 	else
@@ -479,7 +553,7 @@ function loadSlave(txDev, rxDev, queue_pairs, size, src_ports, dst_ports, flows_
                 DST_MAC_NIC2 = DST_MAC
 		
 		local mempool_temp = memory.createMemPool(function(buf)
-                        fillUdpPacket_nic2(txQueue, buf, size, src_port, dst_port)
+                        fillUdpPacket_nic2(txQueue, buf, size, src_ports[1], dst_port)
                 end)
 		mempool = mempool_temp
 
@@ -488,12 +562,26 @@ function loadSlave(txDev, rxDev, queue_pairs, size, src_ports, dst_ports, flows_
 	--local mempool = memory.createMemPool(function(buf)
 		--fillUdpPacket(txQueue, buf, size, src_port, dst_port)
 	--end)
+
 	local bufs = mempool:bufArray()
 	local counter = 0
-	local txCtr = stats:newDevTxCounter(txQueue, "plain")
-	local rxCtr = stats:newDevRxCounter(rxQueue, "plain")
+	local flows = flows_per_group
+	-- Create an array of filenames to store the tx/rx stats:
+	local res_file_names = {}
+
+	local tx_name = "tx_stats_"
+	local rx_name = "rx_stats_"
+        res_file_names[1] = tx_name .. tostring(rg_to_dst_port_map_value) .. ".csv"
+	res_file_names[2] = rx_name .. tostring(rg_to_dst_port_map_value) .. ".csv"	
+
+	for k,v in ipairs(res_file_names) do
+        	log:info("The stats filename: %s", v)
+	end
+
+	local txCtr = stats:newDevTxCounter(txQueue, "CSV", res_file_names[1])
+	local rxCtr = stats:newDevRxCounter(rxQueue, "CSV", res_file_names[2])
 	--local baseIP = parseIPAddress(SRC_IP_BASE)
-	--log:info("The number of flows to generate: [%d]", flows)
+	--log:info("The number of flows to generate: [%d]", flows_per_group)
 	while mg.running() do
 		bufs:alloc(size)
 		for i, buf in ipairs(bufs) do
@@ -509,7 +597,8 @@ function loadSlave(txDev, rxDev, queue_pairs, size, src_ports, dst_ports, flows_
 				--udpDst = dst_port + counter,
 			--}
 			--counter = incAndWrap(counter, flows)
-
+			pkt.udp:setSrcPort(src_ports[1] + counter)
+			counter = incAndWrap(counter, flows - 1)
 		end
 		-- UDP checksums are optional, so using just IPv4 checksums would be sufficient here
 		bufs:offloadUdpChecksums()
@@ -522,18 +611,18 @@ function loadSlave(txDev, rxDev, queue_pairs, size, src_ports, dst_ports, flows_
 end
 
 --function timerSlave(txQueue, rxQueue, queue_nr, size, src_port, dst_port, flows)
-function timerSlave(txDev, rxDev, txDevQueues, rxDevQueues, remain_queue_pairs, size, src_ports, dst_ports, flows_per_group, rg_to_dst_port_map)
+function timerSlave(txDev, rxDev, txDevQueues, rxDevQueues, size, src_ports, dst_ports, flows_per_group, rg_to_dst_port_map, time)
 
-	if remain_queue_pairs <= MAX_QUEUE_COUNT_PORT_82599ES - 1 then
+	if txDev == 0 and rxDev == 1 then
                 DST_MAC = nil
                 GW_IP = DST_IP_NIC1
                 doArp()
                 DST_MAC_NIC1 = DST_MAC
-        else
-		DST_MAC = nil
-                GW_IP = DST_IP_NIC1
-                doArp()
-                DST_MAC_NIC1 = DST_MAC
+        elseif txDev == 2 and rxDev == 3 then
+		--DST_MAC = nil
+                --GW_IP = DST_IP_NIC1
+                --doArp()
+                --DST_MAC_NIC1 = DST_MAC
 
                 DST_MAC = nil
                 GW_IP = DST_IP_NIC2
@@ -545,7 +634,7 @@ function timerSlave(txDev, rxDev, txDevQueues, rxDevQueues, remain_queue_pairs, 
 		log:warn("Packet size %d is smaller than minimum timestamp size 84. Timestamped packets will be larger than load packets.", size)
 		size = 84
 	end
-	print("Remaining queue pairs:", remain_queue_pairs)
+	--print("Remaining queue pairs:", remain_queue_pairs)
 	--[[	
 	txDevQueues = {}
 	for i=1, remain_queue_pairs do
@@ -572,24 +661,26 @@ function timerSlave(txDev, rxDev, txDevQueues, rxDevQueues, remain_queue_pairs, 
 	--log.info(txQueue)
 
 	--local timestamper = ts:newUdpTimestamper(txQueue, rxQueue)
-	local timestampers = {}
+	--local timestamper = nil
 	--local queue_set = {}
-	
+	--[[
 	for i=1, remain_queue_pairs do
 		--print("TxQueue, RxQueue:", txDevQueues[i], rxDevQueues[i])
-		timestampers[i] = ts:newUdpTimestamper(txDevQueues[i], rxDevQueues[i])
-		mg.sleepMillis(100)
+		--timestampers[i] = ts:newUdpTimestamper(txDevQueues[i], rxDevQueues[i])
+		--mg.sleepMillis(100)
+
 		--timestampers[i] = ts:newUdpTimestamper(txDev:getTxQueue(1), rxDev:getRxQueue(1))
 	end
+	]]--
 
 	local hists = {}
-	for i=1, remain_queue_pairs do
+	for i=1, #txDevQueues do
 		hists[i] = hist:new()
 	end
 	
 	-- RG-to-port-map keys of the table:
 	rg_to_dst_port_map_keys = {}
-	for i=1, remain_queue_pairs do
+	for i=1, #txDevQueues do
 		rg_to_dst_port_map_keys[i] = dst_ports[i]
 	end
 	--local hist = hist:new()
@@ -598,14 +689,18 @@ function timerSlave(txDev, rxDev, txDevQueues, rxDevQueues, remain_queue_pairs, 
 	local counter2 = 0
 	local rateLimit = timer:new(0.001)
 	--local baseIP = parseIPAddress(SRC_IP_BASE)
-
+	
 	log:info("Beginning the timestamping test...")	
 	if txDev == 0 and rxDev == 1 then
 	--if txDevQueues[1].dev == 0 and rxDevQueueus[1].dev == 1 then
 		print("Tx0/Rx0 devices are used. !!!")
 		while mg.running() do
-			for i, timestamper in ipairs(timestampers) do
+			for i=1, #txDevQueues do
+				local timestamper = nil
+				mg.sleepMillis(1)
+				timestamper = ts:newUdpTimestamper(txDevQueues[i], rxDevQueues[i])
 				for x, src_port in ipairs(src_ports) do
+
 					hists[i]:update(timestamper:measureLatency(size, function(buf)
  						fillUdpPacket_nic1(txDevQueues[i], buf, size, src_port, dst_ports[i])
 						local pkt = buf:getUdpPacket()
